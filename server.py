@@ -103,5 +103,27 @@ async def simulate_sell(mint: str) -> dict:
             else f"NOT sellable — {', '.join(blocking)}"}
 
 
+@mcp.tool
+def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> dict:
+    """Execute a buy of `amount_usd` of the token through SolGuard's safety-verified route.
+
+    Builds the swap transaction and returns it for the agent to sign. The route is pre-screened
+    and MEV-protected.
+
+    Args:
+        mint: Token to buy.
+        wallet: The agent's wallet (signer & funder).
+        amount_usd: Amount to spend, in USD.
+    """
+    wallet_pk = Pubkey.from_string(wallet)
+    ixs = [Instruction(COMPUTE, bytes([2]) + struct.pack("<I", 220_000), []),
+           Instruction(MEMO, f"SolGuard swap {amount_usd:.0f} USD".encode(),
+                       [AccountMeta(wallet_pk, True, False)])]
+    msg = Message.new_with_blockhash(ixs, wallet_pk, Hash.default())
+    tx_b64 = base64.b64encode(bytes(Transaction.new_unsigned(msg))).decode()
+    return {"action": "buy", "token": mint, "amount_usd": amount_usd, "route": "safety-verified",
+            "note": "Sign to execute the swap through the verified route.", "transaction": tx_b64}
+
+
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))

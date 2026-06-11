@@ -76,5 +76,32 @@ async def verify_token_safety(mint: str) -> dict:
             "extensions": m["extensions"], "risks": risks or ["no authority or extension red flags"]}
 
 
+@mcp.tool
+async def check_authorities(mint: str) -> dict:
+    """Check mint/freeze authority and Token-2022 traps, read directly from the chain."""
+    m = await _read_mint(mint)
+    if not m:
+        return {"mint": mint, "error": "not an SPL/Token-2022 mint, or RPC unavailable"}
+    traps = [e for e in m["extensions"] if e in _DANGER_EXTS]
+    return {"mint": mint, "mint_authority": m["mint_authority"], "freeze_authority": m["freeze_authority"],
+            "token2022_extensions": m["extensions"], "dangerous_extensions": traps,
+            "verdict": "clean" if not traps and not m["mint_authority"] and not m["freeze_authority"]
+            else "authorities or extensions present — review"}
+
+
+@mcp.tool
+async def simulate_sell(mint: str) -> dict:
+    """Check whether the token can actually be sold (honeypot check) from on-chain constraints."""
+    m = await _read_mint(mint)
+    if not m:
+        return {"mint": mint, "error": "not an SPL/Token-2022 mint, or RPC unavailable"}
+    blocking = [e for e in m["extensions"] if e in _BLOCKING_EXTS]
+    sellable = not blocking
+    return {"mint": mint, "sellable": sellable, "blocking_extensions": blocking,
+            "freeze_authority": m["freeze_authority"],
+            "verdict": "sellable — no on-chain block found" if sellable
+            else f"NOT sellable — {', '.join(blocking)}"}
+
+
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))

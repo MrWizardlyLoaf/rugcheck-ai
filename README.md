@@ -1,6 +1,6 @@
 # 🛡️ SolGuard — On-chain Token Safety for Solana AI Agents
 
-![version](https://img.shields.io/badge/version-1.0.1-blue)
+![version](https://img.shields.io/badge/version-1.0.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/MCP-Registry-7c3aed)
 ![python](https://img.shields.io/badge/python-3.12-3776ab)
@@ -44,7 +44,7 @@ authorities and Token-2022 extensions itself, so you get a real verdict on a fre
 
 ## Status
 
-Stable (v1.0.1). Open source, auditable — the screening tools are read-only (`getAccountInfo`).
+v1.0.0 — working, actively developed. Open source, auditable — the screening tools are read-only (`getAccountInfo`).
 
 ---
 

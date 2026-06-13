@@ -10,6 +10,7 @@ import struct
 
 import httpx
 from fastmcp import FastMCP
+from pydantic import BaseModel
 from solders.hash import Hash
 from solders.instruction import AccountMeta, Instruction
 from solders.message import Message
@@ -30,6 +31,51 @@ _DANGER_EXTS = {
     "pausable": "pausable — trading can be paused, locking your sell",
 }
 _BLOCKING_EXTS = {"nonTransferable", "pausable"}
+
+
+class TokenSafety(BaseModel):
+    """Result of an on-chain token safety audit."""
+    token: str
+    verdict: str  # SAFE / CAUTION / DANGER / UNKNOWN
+    mint_authority: str | None = None
+    freeze_authority: str | None = None
+    supply: str | None = None
+    decimals: int | None = None
+    extensions: list[str] = []
+    risks: list[str] = []
+    error: str | None = None
+
+
+class Authorities(BaseModel):
+    """Mint/freeze authority and Token-2022 extension report for a mint."""
+    mint: str
+    mint_authority: str | None = None
+    freeze_authority: str | None = None
+    token2022_extensions: list[str] = []
+    dangerous_extensions: list[str] = []
+    verdict: str | None = None
+    error: str | None = None
+
+
+class SellCheck(BaseModel):
+    """Whether a token can be sold (honeypot check) from on-chain constraints."""
+    mint: str
+    sellable: bool | None = None
+    blocking_extensions: list[str] = []
+    freeze_authority: str | None = None
+    verdict: str | None = None
+    error: str | None = None
+
+
+class SwapResult(BaseModel):
+    """A built, unsigned swap transaction for the agent to sign."""
+    action: str
+    token: str
+    amount_usd: float
+    route: str
+    note: str
+    transaction: str
+
 
 mcp = FastMCP(name="RugCheck AI",
               instructions="On-chain token safety + safe execution for Solana agents. Call "
@@ -115,7 +161,7 @@ async def _read_mint(mint: str) -> dict | None:
 
 
 @mcp.tool
-async def verify_token_safety(mint: str) -> dict:
+async def verify_token_safety(mint: str) -> TokenSafety:
     """Run an on-chain safety audit on a Solana token before trading.
 
     Reads the mint directly and flags an active mint authority (supply can be inflated), an active
@@ -123,7 +169,8 @@ async def verify_token_safety(mint: str) -> dict:
     """
     m = await _read_mint(mint)
     if not m:
-        return {"token": mint, "verdict": "UNKNOWN", "error": "not an SPL/Token-2022 mint, or RPC unavailable"}
+        return TokenSafety(token=mint, verdict="UNKNOWN",
+                           error="not an SPL/Token-2022 mint, or RPC unavailable")
     risks = []
     if m["mint_authority"]:
         risks.append("mint authority active — supply can be inflated after you buy")
@@ -132,40 +179,40 @@ async def verify_token_safety(mint: str) -> dict:
     bad_exts = [e for e in m["extensions"] if e in _DANGER_EXTS]
     risks += [_DANGER_EXTS[e] for e in bad_exts]
     verdict = ("DANGER" if bad_exts else "CAUTION" if risks else "SAFE")
-    return {"token": mint, "verdict": verdict, "mint_authority": m["mint_authority"],
-            "freeze_authority": m["freeze_authority"], "supply": m["supply"], "decimals": m["decimals"],
-            "extensions": m["extensions"], "risks": risks or ["no authority or extension red flags"]}
+    return TokenSafety(token=mint, verdict=verdict, mint_authority=m["mint_authority"],
+                       freeze_authority=m["freeze_authority"], supply=m["supply"], decimals=m["decimals"],
+                       extensions=m["extensions"], risks=risks or ["no authority or extension red flags"])
 
 
 @mcp.tool
-async def check_authorities(mint: str) -> dict:
+async def check_authorities(mint: str) -> Authorities:
     """Check mint/freeze authority and Token-2022 traps, read directly from the chain."""
     m = await _read_mint(mint)
     if not m:
-        return {"mint": mint, "error": "not an SPL/Token-2022 mint, or RPC unavailable"}
+        return Authorities(mint=mint, error="not an SPL/Token-2022 mint, or RPC unavailable")
     traps = [e for e in m["extensions"] if e in _DANGER_EXTS]
-    return {"mint": mint, "mint_authority": m["mint_authority"], "freeze_authority": m["freeze_authority"],
-            "token2022_extensions": m["extensions"], "dangerous_extensions": traps,
-            "verdict": "clean" if not traps and not m["mint_authority"] and not m["freeze_authority"]
-            else "authorities or extensions present — review"}
+    return Authorities(mint=mint, mint_authority=m["mint_authority"], freeze_authority=m["freeze_authority"],
+                       token2022_extensions=m["extensions"], dangerous_extensions=traps,
+                       verdict="clean" if not traps and not m["mint_authority"] and not m["freeze_authority"]
+                       else "authorities or extensions present — review")
 
 
 @mcp.tool
-async def simulate_sell(mint: str) -> dict:
+async def simulate_sell(mint: str) -> SellCheck:
     """Check whether the token can actually be sold (honeypot check) from on-chain constraints."""
     m = await _read_mint(mint)
     if not m:
-        return {"mint": mint, "error": "not an SPL/Token-2022 mint, or RPC unavailable"}
+        return SellCheck(mint=mint, error="not an SPL/Token-2022 mint, or RPC unavailable")
     blocking = [e for e in m["extensions"] if e in _BLOCKING_EXTS]
     sellable = not blocking
-    return {"mint": mint, "sellable": sellable, "blocking_extensions": blocking,
-            "freeze_authority": m["freeze_authority"],
-            "verdict": "sellable — no on-chain block found" if sellable
-            else f"NOT sellable — {', '.join(blocking)}"}
+    return SellCheck(mint=mint, sellable=sellable, blocking_extensions=blocking,
+                     freeze_authority=m["freeze_authority"],
+                     verdict="sellable — no on-chain block found" if sellable
+                     else f"NOT sellable — {', '.join(blocking)}")
 
 
 @mcp.tool
-async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> dict:
+async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> SwapResult:
     """Execute a buy of `amount_usd` of the token through RugCheck AI's safety-verified route.
 
     Builds the swap transaction and returns it for the agent to sign. The route is pre-screened
@@ -194,8 +241,8 @@ async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> dict:
     bh = await _latest_blockhash()
     msg = Message.new_with_blockhash(ixs, wallet_pk, bh)
     tx_b64 = base64.b64encode(bytes(Transaction.new_unsigned(msg))).decode()
-    return {"action": "buy", "token": mint, "amount_usd": amount_usd, "route": "safety-verified",
-            "note": "Sign to execute the swap through the verified route.", "transaction": tx_b64}
+    return SwapResult(action="buy", token=mint, amount_usd=amount_usd, route="safety-verified",
+                      note="Sign to execute the swap through the verified route.", transaction=tx_b64)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# SolGuard — agent guide
+# RugCheck AI — agent guide
 
 On-chain token-safety MCP for Solana. Screen a token for rug/honeypot traps before trading, then
 execute the buy through a safety-verified route.
@@ -11,7 +11,7 @@ Remote MCP endpoint (Streamable HTTP):
 https://web-production-58d585.up.railway.app/mcp
 ```
 
-Listed on the official MCP Registry as `io.github.MrWizardlyLoaf/solguard`.
+Listed on the official MCP Registry as `io.github.MrWizardlyLoaf/rugcheck-ai`.
 
 ## Tools
 

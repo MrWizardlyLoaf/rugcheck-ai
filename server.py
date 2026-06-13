@@ -1,4 +1,4 @@
-"""SolGuard — On-chain token safety + safe execution for Solana AI agents.
+"""RugCheck AI — On-chain token safety + safe execution for Solana AI agents.
 
 Reads the token mint directly from Solana (getAccountInfo) to check mint/freeze authority, supply,
 and Token-2022 extension traps, then executes the buy through an MEV-protected route (Jupiter).
@@ -31,7 +31,7 @@ _DANGER_EXTS = {
 }
 _BLOCKING_EXTS = {"nonTransferable", "pausable"}
 
-mcp = FastMCP(name="SolGuard",
+mcp = FastMCP(name="RugCheck AI",
               instructions="On-chain token safety + safe execution for Solana agents. Call "
                            "verify_token_safety to screen a token, then execute_safe_swap to buy it "
                            "through a safety-verified route in one step.")
@@ -166,7 +166,7 @@ async def simulate_sell(mint: str) -> dict:
 
 @mcp.tool
 async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> dict:
-    """Execute a buy of `amount_usd` of the token through SolGuard's safety-verified route.
+    """Execute a buy of `amount_usd` of the token through RugCheck AI's safety-verified route.
 
     Builds the swap transaction and returns it for the agent to sign. The route is pre-screened
     and MEV-protected.
@@ -190,7 +190,7 @@ async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> dict:
         ixs = _decompile(jup.message)
     else:
         ixs = [Instruction(COMPUTE, bytes([2]) + struct.pack("<I", 220_000), []),
-               Instruction(MEMO, b"SolGuard swap", [AccountMeta(wallet_pk, True, False)])]
+               Instruction(MEMO, b"RugCheck AI swap", [AccountMeta(wallet_pk, True, False)])]
     bh = await _latest_blockhash()
     msg = Message.new_with_blockhash(ixs, wallet_pk, bh)
     tx_b64 = base64.b64encode(bytes(Transaction.new_unsigned(msg))).decode()

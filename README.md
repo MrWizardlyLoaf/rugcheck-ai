@@ -1,4 +1,4 @@
-# 🛡️ SolGuard — On-chain Token Safety for Solana AI Agents
+# 🛡️ RugCheck AI — On-chain Token Safety for Solana AI Agents
 
 ![version](https://img.shields.io/badge/version-1.0.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -27,7 +27,7 @@ https://web-production-58d585.up.railway.app/mcp
 ```
 
 Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io) as
-`io.github.MrWizardlyLoaf/solguard`.
+`io.github.MrWizardlyLoaf/rugcheck-ai`.
 
 **Self-host:**
 
@@ -38,7 +38,7 @@ SOLANA_RPC=<your-rpc-url> python server.py
 
 ## Why
 
-Most agents trade Solana tokens blind. SolGuard calls `getAccountInfo` on the mint and reads the
+Most agents trade Solana tokens blind. RugCheck AI calls `getAccountInfo` on the mint and reads the
 authorities and Token-2022 extensions itself, so you get a real verdict on a fresh launch instead of
 `unknown` — and a live mint or freeze authority is flagged before you buy, not after.
 

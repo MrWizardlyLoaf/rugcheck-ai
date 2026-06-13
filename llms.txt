@@ -1,16 +1,16 @@
-# SolGuard
+# RugCheck AI
 
 > On-chain token-safety MCP for Solana AI agents. Reads a token's mint directly to flag rug &
 > honeypot traps (mint/freeze authority, Token-2022 extensions) before trading, then executes an
 > MEV-protected buy. Built with Python (FastMCP); entry point server.py; screening is read-only.
 
 Remote endpoint: https://web-production-58d585.up.railway.app/mcp
-Registry: io.github.MrWizardlyLoaf/solguard
+Registry: io.github.MrWizardlyLoaf/rugcheck-ai
 
 ## Docs
-- [README](https://github.com/MrWizardlyLoaf/solguard-mcp/blob/main/README.md): overview, tools, connect
-- [Source server.py](https://raw.githubusercontent.com/MrWizardlyLoaf/solguard-mcp/main/server.py): full server code
-- [AGENTS.md](https://github.com/MrWizardlyLoaf/solguard-mcp/blob/main/AGENTS.md): quickstart for agents
+- [README](https://github.com/MrWizardlyLoaf/rugcheck-ai/blob/main/README.md): overview, tools, connect
+- [Source server.py](https://raw.githubusercontent.com/MrWizardlyLoaf/rugcheck-ai/main/server.py): full server code
+- [AGENTS.md](https://github.com/MrWizardlyLoaf/rugcheck-ai/blob/main/AGENTS.md): quickstart for agents
 
 ## Tools
 - verify_token_safety(mint): on-chain safety audit (authority + Token-2022 traps)

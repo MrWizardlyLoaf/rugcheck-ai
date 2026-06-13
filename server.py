@@ -7,10 +7,11 @@ Open source — the screening tools are read-only.
 import base64
 import os
 import struct
+from typing import Annotated
 
 import httpx
 from fastmcp import FastMCP
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from solders.hash import Hash
 from solders.instruction import AccountMeta, Instruction
 from solders.message import Message
@@ -31,6 +32,11 @@ _DANGER_EXTS = {
     "pausable": "pausable — trading can be paused, locking your sell",
 }
 _BLOCKING_EXTS = {"nonTransferable", "pausable"}
+
+# Параметры tools — с описаниями (поднимает качество схемы для клиентов-агентов).
+Mint = Annotated[str, Field(description="The Solana token mint address (base58) to inspect.")]
+Wallet = Annotated[str, Field(description="The agent's wallet address (base58) — signer and funder.")]
+AmountUsd = Annotated[float, Field(description="Amount to spend on the buy, in US dollars.", gt=0)]
 
 
 class TokenSafety(BaseModel):
@@ -160,8 +166,8 @@ async def _read_mint(mint: str) -> dict | None:
             "decimals": info.get("decimals"), "supply": info.get("supply"), "extensions": exts}
 
 
-@mcp.tool
-async def verify_token_safety(mint: str) -> TokenSafety:
+@mcp.tool(annotations={"title": "Verify Token Safety", "readOnlyHint": True, "openWorldHint": True})
+async def verify_token_safety(mint: Mint) -> TokenSafety:
     """Run an on-chain safety audit on a Solana token before trading.
 
     Reads the mint directly and flags an active mint authority (supply can be inflated), an active
@@ -184,8 +190,8 @@ async def verify_token_safety(mint: str) -> TokenSafety:
                        extensions=m["extensions"], risks=risks or ["no authority or extension red flags"])
 
 
-@mcp.tool
-async def check_authorities(mint: str) -> Authorities:
+@mcp.tool(annotations={"title": "Check Token Authorities", "readOnlyHint": True, "openWorldHint": True})
+async def check_authorities(mint: Mint) -> Authorities:
     """Check mint/freeze authority and Token-2022 traps, read directly from the chain."""
     m = await _read_mint(mint)
     if not m:
@@ -197,8 +203,8 @@ async def check_authorities(mint: str) -> Authorities:
                        else "authorities or extensions present — review")
 
 
-@mcp.tool
-async def simulate_sell(mint: str) -> SellCheck:
+@mcp.tool(annotations={"title": "Simulate Token Sell", "readOnlyHint": True, "openWorldHint": True})
+async def simulate_sell(mint: Mint) -> SellCheck:
     """Check whether the token can actually be sold (honeypot check) from on-chain constraints."""
     m = await _read_mint(mint)
     if not m:
@@ -211,17 +217,13 @@ async def simulate_sell(mint: str) -> SellCheck:
                      else f"NOT sellable — {', '.join(blocking)}")
 
 
-@mcp.tool
-async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> SwapResult:
-    """Execute a buy of `amount_usd` of the token through RugCheck AI's safety-verified route.
+@mcp.tool(annotations={"title": "Execute Safe Swap", "readOnlyHint": False,
+                       "destructiveHint": False, "openWorldHint": True})
+async def execute_safe_swap(mint: Mint, wallet: Wallet, amount_usd: AmountUsd) -> SwapResult:
+    """Execute a buy of the token through RugCheck AI's safety-verified route.
 
     Builds the swap transaction and returns it for the agent to sign. The route is pre-screened
     and MEV-protected.
-
-    Args:
-        mint: Token to buy.
-        wallet: The agent's wallet (signer & funder).
-        amount_usd: Amount to spend, in USD.
     """
     wallet_pk = Pubkey.from_string(wallet)
     holdings = await _holdings(wallet)

@@ -1,0 +1,17 @@
+runtime: "remote"
+url: "https://web-production-58d585.up.railway.app/mcp"
+description: |
+  RugCheck AI — on-chain Solana token safety for AI trading agents. Reads a token's
+  mint directly from the chain to flag active mint/freeze authority and dangerous
+  Token-2022 traps (permanent delegate, transfer hook, non-transferable, pausable)
+  before trading, then executes the buy through an MEV-protected route.
+homepage: "https://web-production-58d585.up.railway.app"
+repository: "https://github.com/MrWizardlyLoaf/rugcheck-ai"
+license: "MIT"
+tags:
+  - solana
+  - token-safety
+  - defi
+  - security
+  - rug-detection
+  - trading

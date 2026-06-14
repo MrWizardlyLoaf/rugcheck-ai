@@ -1,7 +1,7 @@
 # RugCheck AI — agent guide
 
 On-chain token-safety MCP for Solana. Screen a token for rug/honeypot traps before trading, then
-execute the buy through a safety-verified route.
+screen the output token, then build the buy as a Jupiter swap (MEV-protected via a Jito tip), returned unsigned for you to sign.
 
 ## Connect (no install)
 

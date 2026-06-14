@@ -8,7 +8,7 @@
 
 A lightweight MCP server that reads a Solana token's mint **directly from the chain** to screen for
 the common rug & honeypot traps **before** your agent trades — active mint/freeze authority and
-dangerous Token-2022 extensions (permanent delegate, transfer hooks, non-transferable, pausable) —
+dangerous Token-2022 extensions (permanent delegate, transfer hooks, non-transferable, pausable, default-frozen) —
 then executes the buy through an MEV-protected route.
 
 ## Tools
@@ -16,7 +16,7 @@ then executes the buy through an MEV-protected route.
 - `verify_token_safety` — on-chain audit: mint/freeze authority + Token-2022 traps
 - `check_authorities` — mint / freeze authority and extension detection
 - `simulate_sell` — can the token actually be sold? (on-chain block check)
-- `execute_safe_swap` — gas-optimized, MEV-protected swap execution
+- `execute_safe_swap` — screens the output token, then builds a gas-optimized, MEV-protected (Jito) Jupiter swap, returned unsigned
 
 ## Connect
 

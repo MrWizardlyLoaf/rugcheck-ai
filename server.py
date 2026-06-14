@@ -1,39 +1,40 @@
 """RugCheck AI — On-chain token safety + safe execution for Solana AI agents.
 
 Reads the token mint directly from Solana (getAccountInfo) to check mint/freeze authority, supply,
-and Token-2022 extension traps, then executes the buy through an MEV-protected route (Jupiter).
-Open source — the screening tools are read-only.
+and Token-2022 extension traps, then builds the swap through Jupiter with MEV protection (Jito tip
++ revert protection) and a dynamic compute-unit budget. Open source — the screening tools are
+read-only; the swap tool only builds an unsigned transaction for you to sign.
 """
-import base64
 import os
+from typing import Annotated, Literal
 
 import httpx
 from fastmcp import FastMCP
-from pydantic import BaseModel
-from solders.hash import Hash
-from solders.instruction import AccountMeta, Instruction
-from solders.message import Message
-from solders.pubkey import Pubkey
-from solders.transaction import Transaction
+from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 RPC = os.environ.get("SOLANA_RPC", "https://api.mainnet-beta.solana.com")
 JUP_QUOTE = "https://lite-api.jup.ag/swap/v1/quote"
 JUP_SWAP = "https://lite-api.jup.ag/swap/v1/swap"
+JITO_TIP_LAMPORTS = 1000  # Jito tip → revert protection + front-run resistance
 
 _DANGER_EXTS = {
     "permanentDelegate": "permanent delegate — the creator can move or burn your tokens anytime",
     "transferHook": "custom transfer hook — can block selling",
     "nonTransferable": "non-transferable — the token cannot be sold",
     "pausable": "pausable — trading can be paused, locking your sell",
+    "defaultAccountState": "default-frozen — new token accounts start frozen, you may be unable to sell",
 }
-_BLOCKING_EXTS = {"nonTransferable", "pausable"}
+# Extensions that can outright block a sale (honeypot mechanics).
+_BLOCKING_EXTS = {"nonTransferable", "pausable", "transferHook", "defaultAccountState"}
+
+Verdict = Literal["SAFE", "CAUTION", "DANGER", "UNKNOWN"]
 
 
 class TokenSafety(BaseModel):
     """Result of an on-chain token safety audit."""
     token: str
-    verdict: str  # SAFE / CAUTION / DANGER / UNKNOWN
+    verdict: Verdict
     mint_authority: str | None = None
     freeze_authority: str | None = None
     supply: str | None = None
@@ -46,21 +47,23 @@ class TokenSafety(BaseModel):
 class Authorities(BaseModel):
     """Mint/freeze authority and Token-2022 extension report for a mint."""
     mint: str
+    verdict: Verdict = "UNKNOWN"
+    summary: str | None = None
     mint_authority: str | None = None
     freeze_authority: str | None = None
     token2022_extensions: list[str] = []
     dangerous_extensions: list[str] = []
-    verdict: str | None = None
     error: str | None = None
 
 
 class SellCheck(BaseModel):
     """Whether a token can be sold (honeypot check) from on-chain constraints."""
     mint: str
+    verdict: Verdict = "UNKNOWN"
+    summary: str | None = None
     sellable: bool | None = None
     blocking_extensions: list[str] = []
     freeze_authority: str | None = None
-    verdict: str | None = None
     error: str | None = None
 
 
@@ -72,50 +75,19 @@ class SwapResult(BaseModel):
     amount: float
     route: str
     note: str
-    transaction: str
+    transaction: str = ""
+    error: str | None = None
 
 
 mcp = FastMCP(name="RugCheck AI",
-              instructions="On-chain token safety + safe execution for Solana agents. Call "
-                           "verify_token_safety to screen a token, then execute_safe_swap to buy it "
-                           "through a safety-verified route in one step.")
-
-
-async def _latest_blockhash() -> Hash:
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash",
-                                    "params": [{"commitment": "finalized"}]})
-    return Hash.from_string(r.json()["result"]["value"]["blockhash"])
-
-
-async def _jupiter_legacy_swap(owner: str, input_mint: str, output_mint: str, amount: int) -> Transaction:
-    """Real Jupiter swap as a legacy transaction (through the actual Jupiter v6 program)."""
-    async with httpx.AsyncClient(timeout=18) as c:
-        q = (await c.get(JUP_QUOTE, params={"inputMint": input_mint, "outputMint": output_mint,
-                                            "amount": amount, "slippageBps": 100,
-                                            "onlyDirectRoutes": "true", "maxAccounts": 20})).json()
-        s = (await c.post(JUP_SWAP, json={"quoteResponse": q, "userPublicKey": owner,
-                                          "asLegacyTransaction": True, "wrapAndUnwrapSol": True})).json()
-    return Transaction.from_bytes(base64.b64decode(s["swapTransaction"]))
-
-
-def _decompile(msg) -> list[Instruction]:
-    """Legacy message -> list of Instructions (recover signer/writable flags from the header)."""
-    keys = list(msg.account_keys)
-    h = msg.header
-    nsig, nro_s, nro_u, n = (h.num_required_signatures, h.num_readonly_signed_accounts,
-                             h.num_readonly_unsigned_accounts, len(keys))
-    def writable(i):
-        return (i < nsig - nro_s) or (nsig <= i < n - nro_u)
-    out = []
-    for ci in msg.instructions:
-        accs = [AccountMeta(keys[i], i < nsig, writable(i)) for i in ci.accounts]
-        out.append(Instruction(keys[ci.program_id_index], bytes(ci.data), accs))
-    return out
+              instructions="On-chain Solana token safety + swap execution. Call verify_token_safety "
+                           "(read-only) to screen a token, then execute_safe_swap to build a "
+                           "Jupiter swap (MEV-protected via a Jito tip) returned unsigned for you "
+                           "to sign. The swap tool screens the output token before building.")
 
 
 async def _read_mint(mint: str) -> dict | None:
-    """Read the mint account directly from Solana: authorities, supply, decimals, extensions."""
+    """Read the mint account directly from Solana: authorities, supply, decimals, extensions, owner."""
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
@@ -128,15 +100,44 @@ async def _read_mint(mint: str) -> dict | None:
         return None
     exts = [e.get("extension") for e in (info.get("extensions") or []) if e.get("extension")]
     return {"mint_authority": info.get("mintAuthority"), "freeze_authority": info.get("freezeAuthority"),
-            "decimals": info.get("decimals"), "supply": info.get("supply"), "extensions": exts}
+            "decimals": info.get("decimals"), "supply": info.get("supply"), "extensions": exts,
+            "owner": value.get("owner")}
 
 
-@mcp.tool
-async def verify_token_safety(mint: str) -> TokenSafety:
-    """Run an on-chain safety audit on a Solana token before trading.
+async def _jupiter_swap(owner: str, input_mint: str, output_mint: str, amount: int) -> dict:
+    """Build a MEV-protected swap via Jupiter: Jito tip (revert protection) + dynamic compute budget.
+
+    Returns {'swapTransaction': base64} on success, or {'error': msg} on any failure (no route,
+    Jupiter down, malformed response) — never raises.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            q = (await c.get(JUP_QUOTE, params={"inputMint": input_mint, "outputMint": output_mint,
+                                                "amount": amount, "slippageBps": 100})).json()
+            if not isinstance(q, dict) or "outAmount" not in q:
+                msg = q.get("error") if isinstance(q, dict) else "bad quote response"
+                return {"error": msg or "no swap route for this pair"}
+            s = (await c.post(JUP_SWAP, json={
+                "quoteResponse": q, "userPublicKey": owner, "wrapAndUnwrapSol": True,
+                "asLegacyTransaction": True, "dynamicComputeUnitLimit": True,
+                "prioritizationFeeLamports": {"jitoTipLamports": JITO_TIP_LAMPORTS}})).json()
+    except Exception as e:
+        return {"error": f"Jupiter unavailable ({type(e).__name__})"}
+    if not isinstance(s, dict) or "swapTransaction" not in s:
+        msg = s.get("error") if isinstance(s, dict) else "bad swap response"
+        return {"error": msg or "swap build failed"}
+    return {"swapTransaction": s["swapTransaction"]}
+
+
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+async def verify_token_safety(
+    mint: Annotated[str, Field(description="The SPL / Token-2022 mint address to screen.")],
+) -> TokenSafety:
+    """Run an on-chain safety audit on a Solana token before trading (read-only).
 
     Reads the mint directly and flags an active mint authority (supply can be inflated), an active
-    freeze authority (your tokens can be frozen), and dangerous Token-2022 extensions.
+    freeze authority (your tokens can be frozen), and dangerous Token-2022 extensions. An active
+    mint or freeze authority is treated as DANGER — it is the canonical rug vector.
     """
     m = await _read_mint(mint)
     if not m:
@@ -149,64 +150,78 @@ async def verify_token_safety(mint: str) -> TokenSafety:
         risks.append("freeze authority active — your tokens can be frozen")
     bad_exts = [e for e in m["extensions"] if e in _DANGER_EXTS]
     risks += [_DANGER_EXTS[e] for e in bad_exts]
-    verdict = ("DANGER" if bad_exts else "CAUTION" if risks else "SAFE")
+    verdict: Verdict = ("DANGER" if (bad_exts or m["mint_authority"] or m["freeze_authority"])
+                        else "CAUTION" if risks else "SAFE")
     return TokenSafety(token=mint, verdict=verdict, mint_authority=m["mint_authority"],
                        freeze_authority=m["freeze_authority"], supply=m["supply"], decimals=m["decimals"],
                        extensions=m["extensions"], risks=risks or ["no authority or extension red flags"])
 
 
-@mcp.tool
-async def check_authorities(mint: str) -> Authorities:
-    """Check mint/freeze authority and Token-2022 traps, read directly from the chain."""
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+async def check_authorities(
+    mint: Annotated[str, Field(description="The SPL / Token-2022 mint address to inspect.")],
+) -> Authorities:
+    """Check mint/freeze authority and Token-2022 traps, read directly from the chain (read-only)."""
     m = await _read_mint(mint)
     if not m:
-        return Authorities(mint=mint, error="not an SPL/Token-2022 mint, or RPC unavailable")
+        return Authorities(mint=mint, verdict="UNKNOWN", error="not an SPL/Token-2022 mint, or RPC unavailable")
     traps = [e for e in m["extensions"] if e in _DANGER_EXTS]
-    return Authorities(mint=mint, mint_authority=m["mint_authority"], freeze_authority=m["freeze_authority"],
-                       token2022_extensions=m["extensions"], dangerous_extensions=traps,
-                       verdict="clean" if not traps and not m["mint_authority"] and not m["freeze_authority"]
-                       else "authorities or extensions present — review")
+    danger = bool(traps or m["mint_authority"] or m["freeze_authority"])
+    return Authorities(mint=mint, verdict="DANGER" if danger else "SAFE",
+                       summary="authorities or dangerous extensions present — review" if danger
+                       else "no mint/freeze authority and no dangerous extensions",
+                       mint_authority=m["mint_authority"], freeze_authority=m["freeze_authority"],
+                       token2022_extensions=m["extensions"], dangerous_extensions=traps)
 
 
-@mcp.tool
-async def simulate_sell(mint: str) -> SellCheck:
-    """Check whether the token can actually be sold (honeypot check) from on-chain constraints."""
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+async def simulate_sell(
+    mint: Annotated[str, Field(description="The SPL / Token-2022 mint address to test for sellability.")],
+) -> SellCheck:
+    """Check whether the token can actually be sold (honeypot check) from on-chain constraints (read-only).
+
+    Treats an active freeze authority and any sell-blocking Token-2022 extension (transfer hook,
+    non-transferable, pausable, default-frozen) as a reason it may NOT be sellable.
+    """
     m = await _read_mint(mint)
     if not m:
-        return SellCheck(mint=mint, error="not an SPL/Token-2022 mint, or RPC unavailable")
+        return SellCheck(mint=mint, verdict="UNKNOWN", error="not an SPL/Token-2022 mint, or RPC unavailable")
     blocking = [e for e in m["extensions"] if e in _BLOCKING_EXTS]
-    sellable = not blocking
-    return SellCheck(mint=mint, sellable=sellable, blocking_extensions=blocking,
-                     freeze_authority=m["freeze_authority"],
-                     verdict="sellable — no on-chain block found" if sellable
-                     else f"NOT sellable — {', '.join(blocking)}")
+    sellable = not blocking and not m["freeze_authority"]
+    reasons = list(blocking) + (["freeze authority active"] if m["freeze_authority"] else [])
+    return SellCheck(mint=mint, verdict="SAFE" if sellable else "DANGER", sellable=sellable,
+                     blocking_extensions=blocking, freeze_authority=m["freeze_authority"],
+                     summary="sellable — no on-chain block found" if sellable
+                     else f"NOT sellable — {', '.join(reasons)}")
 
 
-@mcp.tool
-async def execute_safe_swap(input_mint: str, output_mint: str, wallet: str, amount: float) -> SwapResult:
-    """Swap `amount` of `input_mint` into `output_mint` through a safety-verified, MEV-protected
-    route (Jupiter v6).
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True})
+async def execute_safe_swap(
+    input_mint: Annotated[str, Field(description="The token you pay with (mint address).")],
+    output_mint: Annotated[str, Field(description="The token you want to receive (mint address).")],
+    wallet: Annotated[str, Field(description="Your wallet address (signer & funder).")],
+    amount: Annotated[float, Field(description="Amount of input_mint to swap, in human units (e.g. 50 = 50 USDC).")],
+) -> SwapResult:
+    """Build a Jupiter swap of `amount` of `input_mint` into `output_mint`, MEV-protected via a Jito
+    tip (revert protection) with a dynamic compute-unit budget.
 
-    You decide what you pay with and what you buy — the server only builds the swap and returns it
-    for you to sign. Nothing is broadcast until you sign.
-
-    Args:
-        input_mint: The token you pay with.
-        output_mint: The token you want to receive.
-        wallet: The agent's wallet (signer & funder).
-        amount: Amount of `input_mint` to swap, in human units (e.g. 50 = 50 USDC).
+    The output token is screened on-chain first, then Jupiter's transaction is returned UNCHANGED for
+    you to sign. Nothing is broadcast until you sign. `route` reflects whether the output token passed
+    screening.
     """
-    m = await _read_mint(input_mint)
-    decimals = m["decimals"] if m and m.get("decimals") is not None else 6
+    inp = await _read_mint(input_mint)
+    decimals = inp["decimals"] if inp and inp.get("decimals") is not None else 6
     base_amount = max(int(amount * 10 ** decimals), 1)
-    jup = await _jupiter_legacy_swap(wallet, input_mint, output_mint, base_amount)
-    ixs = _decompile(jup.message)
-    bh = await _latest_blockhash()
-    msg = Message.new_with_blockhash(ixs, Pubkey.from_string(wallet), bh)
-    tx_b64 = base64.b64encode(bytes(Transaction.new_unsigned(msg))).decode()
+    res = await _jupiter_swap(wallet, input_mint, output_mint, base_amount)
+    if "error" in res:
+        return SwapResult(action="swap", input_mint=input_mint, output_mint=output_mint, amount=amount,
+                          route="none", note="Could not build the swap.", error=res["error"])
+    out = await _read_mint(output_mint)
+    clean = bool(out and not out["mint_authority"] and not out["freeze_authority"]
+                 and not [e for e in out["extensions"] if e in _DANGER_EXTS])
+    route = "screened-clean" if clean else "unscreened — output token has authority/extension flags, review"
     return SwapResult(action="swap", input_mint=input_mint, output_mint=output_mint, amount=amount,
-                      route="safety-verified",
-                      note="Sign to execute the swap through the verified route.", transaction=tx_b64)
+                      route=route, note="Sign to execute the Jupiter swap.", transaction=res["swapTransaction"])
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -214,7 +229,7 @@ async def glama_ownership(request):
     """Ownership verification for the Glama MCP connector registry."""
     return JSONResponse({
         "$schema": "https://glama.ai/mcp/schemas/connector.json",
-        "maintainers": [{"email": "eliamcortesytbr@outlook.com"}],
+        "maintainers": [{"email": "mrwizardlyloaf@users.noreply.github.com"}],
     })
 
 

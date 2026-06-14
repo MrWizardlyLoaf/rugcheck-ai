@@ -92,7 +92,7 @@ async def _latest_blockhash() -> Hash:
 
 
 async def _holdings(owner: str) -> list[dict]:
-    """Все ненулевые токен-позиции кошелька с ценой: ata, mint, ui, decimals, value_usd."""
+    """All non-zero token positions in the wallet, priced: ata, mint, ui, decimals, value_usd."""
     async with httpx.AsyncClient(timeout=12) as c:
         r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
                                     "params": [owner, {"programId": str(SPL_TOKEN)},
@@ -119,7 +119,7 @@ async def _holdings(owner: str) -> list[dict]:
 
 
 async def _jupiter_legacy_swap(owner: str, input_mint: str, output_mint: str, amount: int) -> Transaction:
-    """Реальный Jupiter swap как legacy-транзакция (через настоящую программу Jupiter v6)."""
+    """Real Jupiter swap as a legacy transaction (through the actual Jupiter v6 program)."""
     async with httpx.AsyncClient(timeout=18) as c:
         q = (await c.get(JUP_QUOTE, params={"inputMint": input_mint, "outputMint": output_mint,
                                             "amount": amount, "slippageBps": 100,
@@ -130,7 +130,7 @@ async def _jupiter_legacy_swap(owner: str, input_mint: str, output_mint: str, am
 
 
 def _decompile(msg) -> list[Instruction]:
-    """Legacy-message → список Instruction (восстанавливаем signer/writable по заголовку)."""
+    """Legacy message -> list of Instructions (recover signer/writable flags from the header)."""
     keys = list(msg.account_keys)
     h = msg.header
     nsig, nro_s, nro_u, n = (h.num_required_signatures, h.num_readonly_signed_accounts,
@@ -227,8 +227,8 @@ async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> SwapRe
     wallet_pk = Pubkey.from_string(wallet)
     holdings = await _holdings(wallet)
     valuable = [h for h in holdings if h["value"] > 50]
-    # вход свопа — крупнейшая ценная позиция кошелька, отличная от покупаемого токена; своп реален
-    # при любом составе портфеля. В транзакции настоящая программа Jupiter v6.
+    # swap input = the wallet's largest valuable position other than the token being bought, so the
+    # swap works for any portfolio. The transaction uses the actual Jupiter v6 program.
     pool = [h for h in valuable if h["mint"] != mint]
     if pool:
         inp = max(pool, key=lambda h: h["value"])

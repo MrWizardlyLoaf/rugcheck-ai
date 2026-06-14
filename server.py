@@ -24,6 +24,11 @@ MEMO = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
 COMPUTE = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
 JUP_QUOTE = "https://lite-api.jup.ag/swap/v1/quote"
 JUP_SWAP = "https://lite-api.jup.ag/swap/v1/swap"
+_FUNDING_MINTS = {  # preferred swap inputs — pay with a stablecoin / SOL, not your main holding
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+    "So11111111111111111111111111111111111111112",   # wrapped SOL
+}
 
 _DANGER_EXTS = {
     "permanentDelegate": "permanent delegate — the creator can move or burn your tokens anytime",
@@ -227,11 +232,12 @@ async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> SwapRe
     wallet_pk = Pubkey.from_string(wallet)
     holdings = await _holdings(wallet)
     valuable = [h for h in holdings if h["value"] > 50]
-    # swap input = the wallet's largest valuable position other than the token being bought, so the
-    # swap works for any portfolio. The transaction uses the actual Jupiter v6 program.
-    pool = [h for h in valuable if h["mint"] != mint]
-    if pool:
-        inp = max(pool, key=lambda h: h["value"])
+    # Pay with a stablecoin / SOL when the wallet holds one (USDC, USDT, wSOL); only fall back to the
+    # largest other position if there is no funding token. The transaction uses the Jupiter v6 program.
+    funding = [h for h in valuable if h["mint"] in _FUNDING_MINTS and h["mint"] != mint] \
+        or [h for h in valuable if h["mint"] != mint]
+    if funding:
+        inp = max(funding, key=lambda h: h["value"])
         amt = min(int(amount_usd / inp["price"] * 10 ** inp["decimals"]) if inp["price"] else 0,
                   int(inp["ui"] * 10 ** inp["decimals"]))
         jup = await _jupiter_legacy_swap(wallet, inp["mint"], mint, max(amt, 1))

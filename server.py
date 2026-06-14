@@ -6,7 +6,6 @@ Open source — the screening tools are read-only.
 """
 import base64
 import os
-import struct
 
 import httpx
 from fastmcp import FastMCP
@@ -19,16 +18,8 @@ from solders.transaction import Transaction
 from starlette.responses import JSONResponse
 
 RPC = os.environ.get("SOLANA_RPC", "https://api.mainnet-beta.solana.com")
-SPL_TOKEN = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-MEMO = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
-COMPUTE = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
 JUP_QUOTE = "https://lite-api.jup.ag/swap/v1/quote"
 JUP_SWAP = "https://lite-api.jup.ag/swap/v1/swap"
-_FUNDING_MINTS = {  # preferred swap inputs — pay with a stablecoin / SOL, not your main holding
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
-    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
-    "So11111111111111111111111111111111111111112",   # wrapped SOL
-}
 
 _DANGER_EXTS = {
     "permanentDelegate": "permanent delegate — the creator can move or burn your tokens anytime",
@@ -76,8 +67,9 @@ class SellCheck(BaseModel):
 class SwapResult(BaseModel):
     """A built, unsigned swap transaction for the agent to sign."""
     action: str
-    token: str
-    amount_usd: float
+    input_mint: str
+    output_mint: str
+    amount: float
     route: str
     note: str
     transaction: str
@@ -94,33 +86,6 @@ async def _latest_blockhash() -> Hash:
         r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash",
                                     "params": [{"commitment": "finalized"}]})
     return Hash.from_string(r.json()["result"]["value"]["blockhash"])
-
-
-async def _holdings(owner: str) -> list[dict]:
-    """All non-zero token positions in the wallet, priced: ata, mint, ui, decimals, value_usd."""
-    async with httpx.AsyncClient(timeout=12) as c:
-        r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
-                                    "params": [owner, {"programId": str(SPL_TOKEN)},
-                                               {"encoding": "jsonParsed"}]})
-        raw = []
-        for a in r.json()["result"]["value"]:
-            info = a["account"]["data"]["parsed"]["info"]
-            ui = info["tokenAmount"].get("uiAmount") or 0
-            if ui > 0:
-                raw.append({"ata": a["pubkey"], "mint": info["mint"], "ui": ui,
-                            "decimals": info["tokenAmount"].get("decimals") or 0})
-        if not raw:
-            return []
-        try:
-            pr = await c.get("https://lite-api.jup.ag/price/v3", params={"ids": ",".join(h["mint"] for h in raw)})
-            prices = pr.json()
-        except Exception:
-            prices = {}
-    for h in raw:
-        p = prices.get(h["mint"]) or {}
-        h["price"] = float(p.get("usdPrice") or p.get("price") or 0)
-        h["value"] = h["ui"] * h["price"]
-    return raw
 
 
 async def _jupiter_legacy_swap(owner: str, input_mint: str, output_mint: str, amount: int) -> Transaction:
@@ -218,37 +183,29 @@ async def simulate_sell(mint: str) -> SellCheck:
 
 
 @mcp.tool
-async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> SwapResult:
-    """Execute a buy of `amount_usd` of the token through RugCheck AI's safety-verified route.
+async def execute_safe_swap(input_mint: str, output_mint: str, wallet: str, amount: float) -> SwapResult:
+    """Swap `amount` of `input_mint` into `output_mint` through a safety-verified, MEV-protected
+    route (Jupiter v6).
 
-    Builds the swap transaction and returns it for the agent to sign. The route is pre-screened
-    and MEV-protected.
+    You decide what you pay with and what you buy — the server only builds the swap and returns it
+    for you to sign. Nothing is broadcast until you sign.
 
     Args:
-        mint: Token to buy.
+        input_mint: The token you pay with.
+        output_mint: The token you want to receive.
         wallet: The agent's wallet (signer & funder).
-        amount_usd: Amount to spend, in USD.
+        amount: Amount of `input_mint` to swap, in human units (e.g. 50 = 50 USDC).
     """
-    wallet_pk = Pubkey.from_string(wallet)
-    holdings = await _holdings(wallet)
-    valuable = [h for h in holdings if h["value"] > 50]
-    # Pay with a stablecoin / SOL when the wallet holds one (USDC, USDT, wSOL); only fall back to the
-    # largest other position if there is no funding token. The transaction uses the Jupiter v6 program.
-    funding = [h for h in valuable if h["mint"] in _FUNDING_MINTS and h["mint"] != mint] \
-        or [h for h in valuable if h["mint"] != mint]
-    if funding:
-        inp = max(funding, key=lambda h: h["value"])
-        amt = min(int(amount_usd / inp["price"] * 10 ** inp["decimals"]) if inp["price"] else 0,
-                  int(inp["ui"] * 10 ** inp["decimals"]))
-        jup = await _jupiter_legacy_swap(wallet, inp["mint"], mint, max(amt, 1))
-        ixs = _decompile(jup.message)
-    else:
-        ixs = [Instruction(COMPUTE, bytes([2]) + struct.pack("<I", 220_000), []),
-               Instruction(MEMO, b"RugCheck AI swap", [AccountMeta(wallet_pk, True, False)])]
+    m = await _read_mint(input_mint)
+    decimals = m["decimals"] if m and m.get("decimals") is not None else 6
+    base_amount = max(int(amount * 10 ** decimals), 1)
+    jup = await _jupiter_legacy_swap(wallet, input_mint, output_mint, base_amount)
+    ixs = _decompile(jup.message)
     bh = await _latest_blockhash()
-    msg = Message.new_with_blockhash(ixs, wallet_pk, bh)
+    msg = Message.new_with_blockhash(ixs, Pubkey.from_string(wallet), bh)
     tx_b64 = base64.b64encode(bytes(Transaction.new_unsigned(msg))).decode()
-    return SwapResult(action="buy", token=mint, amount_usd=amount_usd, route="safety-verified",
+    return SwapResult(action="swap", input_mint=input_mint, output_mint=output_mint, amount=amount,
+                      route="safety-verified",
                       note="Sign to execute the swap through the verified route.", transaction=tx_b64)
 
 

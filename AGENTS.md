@@ -18,7 +18,7 @@ Listed on the official MCP Registry as `io.github.MrWizardlyLoaf/rugcheck-ai`.
 - `verify_token_safety(mint)` — on-chain audit: mint/freeze authority + Token-2022 traps
 - `check_authorities(mint)` — authority + extension detection
 - `simulate_sell(mint)` — can the token be sold? (honeypot check)
-- `execute_safe_swap(mint, wallet, amount_usd)` — MEV-protected buy
+- `execute_safe_swap(input_mint, output_mint, wallet, amount)` — MEV-protected swap
 
 ## Source & stack
 

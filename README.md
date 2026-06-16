@@ -1,6 +1,6 @@
 # 🛡️ RugCheck AI — On-chain Token Safety for Solana AI Agents
 
-![version](https://img.shields.io/badge/version-1.0.2-blue)
+![version](https://img.shields.io/badge/version-1.1.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/MCP-Registry-7c3aed)
 ![python](https://img.shields.io/badge/python-3.12-3776ab)
@@ -15,9 +15,19 @@ then, for tokens that pass, builds the buy as an **unsigned** Jupiter transactio
 
 ## Tools
 
-- `verify_token_safety` — on-chain audit: mint/freeze authority + Token-2022 traps
+**Screening**
+- `scan_token` — full safety report in one call: authority, Token-2022 traps, honeypot, liquidity & holder concentration → SAFE/CAUTION/DANGER + a 0–100 score
+- `verify_token_safety` — on-chain audit: mint/freeze authority + Token-2022 traps + live market
 - `check_authorities` — mint / freeze authority and extension detection
-- `simulate_sell` — can the token actually be sold? (on-chain block check)
+- `simulate_sell` — can the token actually be sold? (honeypot check)
+- `check_liquidity` — DEX liquidity, 24h volume, age, buys/sells
+- `holders_breakdown` — top-holder concentration (dump risk)
+- `token_age` — freshness + real trading activity
+- `rug_forecast` — heuristic rug ETA: probability + urgency window + factors
+- `check_deployer` — the wallets that hold power over the token
+- `compare_tokens` — rank a basket of tokens safest-first
+
+**Execution**
 - `execute_safe_swap` — re-screens the mint, then builds a Jito-tipped (MEV-resistant) Jupiter swap (unsigned)
 
 ## Connect
@@ -59,7 +69,7 @@ on-chain rug check before entering — then a screened, MEV-resistant route once
 
 ## Status
 
-v1.0.2 — working, actively developed, CI-tested. Open source, auditable — the screening tools are
+v1.1.0 — working, actively developed, CI-tested. Open source, auditable — the screening tools are
 read-only (`getAccountInfo`); `execute_safe_swap` only builds an unsigned transaction for you to sign.
 
 ---

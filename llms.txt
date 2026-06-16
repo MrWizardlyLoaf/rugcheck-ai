@@ -20,7 +20,14 @@ token due-diligence for autonomous Solana trading agents, snipers and bots.
 - [AGENTS.md](https://github.com/MrWizardlyLoaf/rugcheck-ai/blob/main/AGENTS.md): quickstart for agents
 
 ## Tools
-- verify_token_safety(mint): on-chain safety audit (authority + Token-2022 traps)
+- scan_token(mint): full safety report — authority, Token-2022 traps, honeypot, liquidity, holder concentration → SAFE/CAUTION/DANGER + 0-100 score
+- verify_token_safety(mint): on-chain safety audit (authority + Token-2022 traps + live market)
 - check_authorities(mint): mint/freeze authority + extension detection
 - simulate_sell(mint): honeypot / sellability check
+- check_liquidity(mint): DEX liquidity, 24h volume, age, buys/sells
+- holders_breakdown(mint): top-holder concentration (dump risk)
+- token_age(mint): freshness + trading activity
+- rug_forecast(mint): heuristic rug ETA — probability + urgency + factors
+- check_deployer(mint): the wallets that hold power over the token
+- compare_tokens(mints): rank a basket safest-first
 - execute_safe_swap(mint, wallet, amount_usd): re-screened, Jito-tipped (MEV-resistant) execution; returns unsigned tx

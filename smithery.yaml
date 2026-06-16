@@ -4,7 +4,7 @@ description: |
   RugCheck AI — on-chain Solana token safety for AI trading agents. Reads a token's
   mint directly from the chain to flag active mint/freeze authority and dangerous
   Token-2022 traps (permanent delegate, transfer hook, non-transferable, pausable, default-frozen)
-  before trading, then executes the buy through an MEV-protected route.
+  before trading, then builds the buy as an unsigned Jupiter swap (small Jito tip for inclusion) — you sign it.
 homepage: "https://web-production-58d585.up.railway.app"
 repository: "https://github.com/MrWizardlyLoaf/rugcheck-ai"
 license: "MIT"

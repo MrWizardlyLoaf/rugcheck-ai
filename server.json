@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.MrWizardlyLoaf/rugcheck-ai",
   "description": "Solana token safety for AI agents — rug-pull, honeypot & Token-2022 trap detection before you buy.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "repository": {
     "url": "https://github.com/MrWizardlyLoaf/rugcheck-ai",
     "source": "github"

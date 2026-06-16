@@ -2,7 +2,7 @@
 
 > On-chain token-safety MCP for Solana AI agents. Reads a token's mint directly to flag rug &
 > honeypot traps (mint/freeze authority, Token-2022 extensions) before trading, then builds an
-> unsigned, Jito-tipped (MEV-resistant) Jupiter buy for tokens that pass. Built with Python
+> unsigned, Jito-tipped Jupiter buy for tokens that pass. Built with Python
 > (FastMCP); entry point server.py; screening is read-only, execution returns an unsigned tx.
 
 Remote endpoint: https://web-production-58d585.up.railway.app/mcp
@@ -21,13 +21,17 @@ token due-diligence for autonomous Solana trading agents, snipers and bots.
 
 ## Tools
 - scan_token(mint): full safety report — authority, Token-2022 traps, honeypot, liquidity, holder concentration → SAFE/CAUTION/DANGER + 0-100 score
+- is_safe(mint): quick yes/no gate — one boolean before trading
 - verify_token_safety(mint): on-chain safety audit (authority + Token-2022 traps + live market)
 - check_authorities(mint): mint/freeze authority + extension detection
 - simulate_sell(mint): honeypot / sellability check
+- simulate_trade(mint, amount_usd): round-trip buy→sell — real entry/exit cost & loss %
 - check_liquidity(mint): DEX liquidity, 24h volume, age, buys/sells
 - holders_breakdown(mint): top-holder concentration (dump risk)
 - token_age(mint): freshness + trading activity
 - rug_forecast(mint): heuristic rug ETA — probability + urgency + factors
+- scammer_dna(mint): intent score (0-100) from structural scam signals
 - check_deployer(mint): the wallets that hold power over the token
 - compare_tokens(mints): rank a basket safest-first
-- execute_safe_swap(mint, wallet, amount_usd): re-screened, Jito-tipped (MEV-resistant) execution; returns unsigned tx
+- batch_scan(mints): scan up to 10 tokens at once, one report each
+- execute_safe_swap(mint, wallet, amount_usd): re-screened, Jito-tipped execution (refuses DANGER); returns unsigned tx

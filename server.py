@@ -2,35 +2,26 @@
 
 Reads the token mint directly from Solana (getAccountInfo) to check mint/freeze authority, supply,
 and Token-2022 extension traps. A token that passes the screen can be bought in the same step via a
-Jupiter route that carries a Jito tip (bundle inclusion + revert protection) for MEV-resistance.
+Jupiter route that carries a small Jito tip for faster inclusion.
 
 Screening tools are read-only (getAccountInfo). execute_safe_swap re-runs the same screen and only
 builds an UNSIGNED transaction for the agent to sign — it never holds keys, never signs, never sends.
 """
-import base64
 import os
-import struct
 import time
 
 import httpx
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
-from solders.hash import Hash
-from solders.instruction import AccountMeta, Instruction
-from solders.message import Message
-from solders.pubkey import Pubkey
-from solders.transaction import Transaction
 from starlette.responses import JSONResponse, PlainTextResponse
 
 RPC = os.environ.get("SOLANA_RPC", "https://api.mainnet-beta.solana.com")
-SPL_TOKEN = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-MEMO = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
-COMPUTE = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
 JUP_QUOTE = "https://lite-api.jup.ag/swap/v1/quote"
 JUP_SWAP = "https://lite-api.jup.ag/swap/v1/swap"
 JUP_PRICE = "https://lite-api.jup.ag/price/v3"
 DEXSCREENER = "https://api.dexscreener.com/latest/dex/tokens/"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+SOL_MINT = "So11111111111111111111111111111111111111112"  # wSOL — sell-route quote when the token IS USDC
 
 _DANGER_EXTS = {
     "permanentDelegate": "permanent delegate — the creator can move or burn your tokens anytime",
@@ -140,75 +131,14 @@ class RiskReport(BaseModel):
 mcp = FastMCP(name="RugCheck AI",
               instructions="On-chain token-safety screening + safe execution for Solana trading agents. "
                            "Start with scan_token(mint) for the full SAFE/CAUTION/DANGER verdict (authority, "
-                           "Token-2022 traps, honeypot, liquidity and holder concentration in one call). Drill "
-                           "in with verify_token_safety, check_authorities, simulate_sell (honeypot), "
-                           "check_liquidity, holders_breakdown, token_age, rug_forecast (rug ETA) and "
-                           "check_deployer; compare_tokens ranks a basket safest-first. Then execute_safe_swap "
-                           "buys a token that cleared — it re-screens and returns an unsigned, Jito-tipped "
-                           "(MEV-resistant) transaction for you to sign. Screening is read-only; nothing ever signs for you.")
-
-
-async def _latest_blockhash() -> Hash:
-    async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash",
-                                    "params": [{"commitment": "finalized"}]})
-    return Hash.from_string(r.json()["result"]["value"]["blockhash"])
-
-
-async def _holdings(owner: str) -> list[dict]:
-    """Все ненулевые токен-позиции кошелька с ценой: ata, mint, ui, decimals, value_usd."""
-    async with httpx.AsyncClient(timeout=12) as c:
-        r = await c.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
-                                    "params": [owner, {"programId": str(SPL_TOKEN)},
-                                               {"encoding": "jsonParsed"}]})
-        raw = []
-        for a in r.json()["result"]["value"]:
-            info = a["account"]["data"]["parsed"]["info"]
-            ui = info["tokenAmount"].get("uiAmount") or 0
-            if ui > 0:
-                raw.append({"ata": a["pubkey"], "mint": info["mint"], "ui": ui,
-                            "decimals": info["tokenAmount"].get("decimals") or 0})
-        if not raw:
-            return []
-        try:
-            pr = await c.get("https://lite-api.jup.ag/price/v3", params={"ids": ",".join(h["mint"] for h in raw)})
-            prices = pr.json()
-        except Exception:
-            prices = {}
-    for h in raw:
-        p = prices.get(h["mint"]) or {}
-        h["price"] = float(p.get("usdPrice") or p.get("price") or 0)
-        h["value"] = h["ui"] * h["price"]
-    return raw
-
-
-async def _jupiter_legacy_swap(owner: str, input_mint: str, output_mint: str, amount: int) -> Transaction:
-    """Real Jupiter swap as a legacy transaction. A Jito tip is attached via Jupiter's
-    prioritizationFeeLamports, so the swap is eligible for bundle inclusion with revert protection
-    (MEV-resistant) rather than being exposed in the public mempool to sandwiching."""
-    async with httpx.AsyncClient(timeout=18) as c:
-        q = (await c.get(JUP_QUOTE, params={"inputMint": input_mint, "outputMint": output_mint,
-                                            "amount": amount, "slippageBps": 100,
-                                            "onlyDirectRoutes": "true", "maxAccounts": 20})).json()
-        s = (await c.post(JUP_SWAP, json={"quoteResponse": q, "userPublicKey": owner,
-                                          "asLegacyTransaction": True, "wrapAndUnwrapSol": True,
-                                          "prioritizationFeeLamports": {"jitoTipLamports": 100_000}})).json()
-    return Transaction.from_bytes(base64.b64decode(s["swapTransaction"]))
-
-
-def _decompile(msg) -> list[Instruction]:
-    """Legacy-message → список Instruction (восстанавливаем signer/writable по заголовку)."""
-    keys = list(msg.account_keys)
-    h = msg.header
-    nsig, nro_s, nro_u, n = (h.num_required_signatures, h.num_readonly_signed_accounts,
-                             h.num_readonly_unsigned_accounts, len(keys))
-    def writable(i):
-        return (i < nsig - nro_s) or (nsig <= i < n - nro_u)
-    out = []
-    for ci in msg.instructions:
-        accs = [AccountMeta(keys[i], i < nsig, writable(i)) for i in ci.accounts]
-        out.append(Instruction(keys[ci.program_id_index], bytes(ci.data), accs))
-    return out
+                           "Token-2022 traps, honeypot, liquidity and holder concentration in one call), or "
+                           "is_safe(mint) for a quick yes/no gate. Drill in with verify_token_safety, "
+                           "check_authorities, simulate_sell (honeypot), simulate_trade (round-trip cost), "
+                           "check_liquidity, holders_breakdown, token_age, rug_forecast (rug ETA), "
+                           "scammer_dna (intent score) and check_deployer; compare_tokens / batch_scan handle "
+                           "a basket. Then execute_safe_swap buys a token that cleared — it re-screens and "
+                           "returns an unsigned, Jito-tipped transaction for you to sign. "
+                           "Screening is read-only; nothing ever signs for you.")
 
 
 async def _read_mint(mint: str) -> dict | None:
@@ -263,8 +193,11 @@ async def verify_token_safety(mint: str) -> TokenSafety:
         risks.append("freeze authority active — your tokens can be frozen")
     bad_exts = [e for e in m["extensions"] if e in _DANGER_EXTS]
     risks += [_DANGER_EXTS[e] for e in bad_exts]
-    if await _has_market(mint) is False:
+    market = await _has_market(mint)
+    if market is False:
         risks.append("no live market — illiquid or unlaunched, you may not be able to sell")
+    elif market is None:
+        risks.append("market status unverified — could not confirm a live route")
     verdict = ("DANGER" if bad_exts else "CAUTION" if risks else "SAFE")
     return TokenSafety(token=mint, verdict=verdict, mint_authority=m["mint_authority"],
                        freeze_authority=m["freeze_authority"], supply=m["supply"], decimals=m["decimals"],
@@ -293,11 +226,12 @@ async def check_authorities(mint: str) -> Authorities:
 
 
 async def _can_route_sell(mint: str, decimals: int) -> bool | None:
-    """Live sell-route probe: can `mint` be routed to USDC on Jupiter? None on error."""
+    """Live sell-route probe: can `mint` be routed out on Jupiter? None on error."""
+    quote = SOL_MINT if mint == USDC_MINT else USDC_MINT  # USDC routes to SOL (USDC->USDC is degenerate)
     try:
         async with httpx.AsyncClient(timeout=8) as c:
             q = (await c.get(JUP_QUOTE, params={
-                "inputMint": mint, "outputMint": USDC_MINT,
+                "inputMint": mint, "outputMint": quote,
                 "amount": 10 ** min(decimals or 0, 9), "slippageBps": 300})).json()
         return bool(q.get("outAmount") and not q.get("error"))
     except Exception:
@@ -373,6 +307,8 @@ async def simulate_sell(mint: str) -> SellCheck:
         sellable, verdict = False, f"NOT sellable — {', '.join(blocking)}"
     elif route is False:
         sellable, verdict = False, "NOT sellable — no live sell route (illiquid or honeypot)"
+    elif route is None:
+        sellable, verdict = None, "sellability UNCONFIRMED — sell-route probe failed, retry before trusting"
     else:
         sellable, verdict = True, "sellable — on-chain clear and a live sell route exists"
     return SellCheck(mint=mint, sellable=sellable, blocking_extensions=blocking,
@@ -380,46 +316,56 @@ async def simulate_sell(mint: str) -> SellCheck:
 
 
 @mcp.tool
-async def execute_safe_swap(mint: str, wallet: str, amount_usd: float) -> SwapResult:
-    """Buy `amount_usd` of the token in one step — but only AFTER it passes the on-chain safety screen.
+async def execute_safe_swap(mint: str, wallet: str, amount_usd: float, input_mint: str = USDC_MINT) -> SwapResult:
+    """Buy `amount_usd` of a token, paying with USDC (or `input_mint`) — only AFTER it passes the scan.
 
-    This is the point of a safety router: the agent never executes an unscreened trade. The mint is
-    re-screened here (same check as verify_token_safety); if it carries a dangerous Token-2022
-    extension, no swap is built. The wallet's holdings are read to choose the funding position for the
-    swap. Returns an UNSIGNED Jupiter transaction (Jito-tipped, MEV-resistant) for the agent to
-    sign — keys never leave the agent.
+    The point of a safety router: never execute an unscreened trade. The target mint is re-scanned
+    here with the full scan_token verdict; if the verdict is DANGER (honeypot, active freeze/mint
+    authority, dangerous Token-2022 extension, no sell route), NO swap is built. Otherwise it builds a
+    Jupiter swap from `input_mint` (USDC by default) into the target for exactly `amount_usd` and
+    returns an UNSIGNED transaction for you to sign. The build adds a small Jito tip (~0.0001 SOL) for
+    faster inclusion and wraps/unwraps SOL as needed. Note: only a DANGER verdict is refused — a CAUTION
+    token (e.g. an active mint authority) is allowed through, so check the scan yourself if you require
+    SAFE-only. The server only reads the target mint and builds the route — it never reads your other
+    holdings, never holds keys, never signs, never sends.
 
     Args:
         mint: Token to buy.
-        wallet: The agent's wallet (signer & funder).
-        amount_usd: Amount to spend, in USD.
+        wallet: The agent's wallet — signer and funder (the swap is built for this pubkey).
+        amount_usd: Amount to spend, in USD of the input token.
+        input_mint: Mint to pay with — defaults to USDC. The swap is always input_mint -> mint.
     """
-    wallet_pk = Pubkey.from_string(wallet)
-    # safety-verified = непроверенное не исполняем: тот же on-chain скрин, что и verify_token_safety
-    screen = await _read_mint(mint)
-    if screen and [e for e in screen["extensions"] if e in _DANGER_EXTS]:
+    # Full re-scan; refuse to build a swap for anything that scans DANGER.
+    report = await scan_token(mint)
+    if report.verdict == "DANGER":
+        reason = "; ".join(report.risks[:2]) or "failed safety scan"
         return SwapResult(action="blocked", token=mint, amount_usd=amount_usd, route="screen-blocked",
-                          note="Token failed the on-chain safety screen (dangerous Token-2022 "
-                               "extension) — no swap was built.", transaction="")
-    holdings = await _holdings(wallet)
-    valuable = [h for h in holdings if h["value"] > 50]
-    # вход свопа — крупнейшая ценная позиция кошелька, отличная от покупаемого токена; своп реален
-    # при любом составе портфеля. В транзакции настоящая программа Jupiter v6.
-    pool = [h for h in valuable if h["mint"] != mint]
-    if pool:
-        inp = max(pool, key=lambda h: h["value"])
-        amt = min(int(amount_usd / inp["price"] * 10 ** inp["decimals"]) if inp["price"] else 0,
-                  int(inp["ui"] * 10 ** inp["decimals"]))
-        jup = await _jupiter_legacy_swap(wallet, inp["mint"], mint, max(amt, 1))
-        ixs = _decompile(jup.message)
+                          note=f"Refused — scan_token returned DANGER: {reason}. No swap built.", transaction="")
+    if input_mint == USDC_MINT:
+        in_decimals = 6
     else:
-        ixs = [Instruction(COMPUTE, bytes([2]) + struct.pack("<I", 220_000), []),
-               Instruction(MEMO, b"RugCheck AI swap", [AccountMeta(wallet_pk, True, False)])]
-    bh = await _latest_blockhash()
-    msg = Message.new_with_blockhash(ixs, wallet_pk, bh)
-    tx_b64 = base64.b64encode(bytes(Transaction.new_unsigned(msg))).decode()
+        im = await _read_mint(input_mint)
+        in_decimals = im["decimals"] if im and im.get("decimals") is not None else 9
+    amount = max(1, int(amount_usd * 10 ** in_decimals))
+    try:
+        async with httpx.AsyncClient(timeout=18) as c:
+            q = (await c.get(JUP_QUOTE, params={"inputMint": input_mint, "outputMint": mint,
+                                                "amount": amount, "slippageBps": 100})).json()
+            if q.get("error") or not q.get("outAmount"):
+                return SwapResult(action="blocked", token=mint, amount_usd=amount_usd, route="no-route",
+                                  note="No swap route available for this pair right now.", transaction="")
+            s = (await c.post(JUP_SWAP, json={"quoteResponse": q, "userPublicKey": wallet,
+                                              "asLegacyTransaction": True, "wrapAndUnwrapSol": True,
+                                              "prioritizationFeeLamports": {"jitoTipLamports": 100_000}})).json()
+        if not s.get("swapTransaction"):
+            return SwapResult(action="blocked", token=mint, amount_usd=amount_usd, route="no-route",
+                              note="Could not build the swap transaction (no route).", transaction="")
+    except Exception as e:
+        return SwapResult(action="blocked", token=mint, amount_usd=amount_usd, route="error",
+                          note=f"Swap build failed: {type(e).__name__}.", transaction="")
     return SwapResult(action="buy", token=mint, amount_usd=amount_usd, route="safety-verified",
-                      note="Sign to execute the swap through the verified route.", transaction=tx_b64)
+                      note="Screened OK — sign to execute the swap (input_mint -> token).",
+                      transaction=s["swapTransaction"])
 
 
 @mcp.tool
@@ -448,6 +394,8 @@ async def scan_token(mint: str) -> RiskReport:
     sellable = await _can_route_sell(mint, m["decimals"] or 0)
     if sellable is False:
         risks.append("no live sell route — illiquid or honeypot")
+    elif sellable is None:
+        risks.append("sell route could not be verified — treat as unconfirmed, not safe")
     dex = await _dexscreener(mint) or {}
     holders = await _largest_accounts(mint) or {}
     if (holders.get("top_holder_pct") or 0) >= 50:
@@ -568,6 +516,96 @@ async def compare_tokens(mints: list[str]) -> list[RiskReport]:
     return sorted(out, key=lambda r: r.safety_score, reverse=True)
 
 
+@mcp.tool
+async def is_safe(mint: str) -> dict:
+    """Quick yes/no gate before trading: is this token safe enough to enter?
+
+    Wraps the full scan_token into a single boolean for fast decisions. `safe` is True only when the
+    verdict is SAFE and a live sell route exists — anything CAUTION/DANGER or unsellable returns False.
+
+    Args:
+        mint: The SPL or Token-2022 mint address.
+    """
+    r = await scan_token(mint)
+    safe = r.verdict == "SAFE" and r.sellable is True
+    reason = next((x for x in r.risks if x != "no red flags found"), "no red flags")
+    return {"mint": mint, "safe": safe, "verdict": r.verdict, "safety_score": r.safety_score, "reason": reason}
+
+
+@mcp.tool
+async def simulate_trade(mint: str, amount_usd: float = 100.0) -> dict:
+    """Full round-trip simulation: buy `amount_usd` of the token with USDC, then sell it ALL back.
+
+    Estimates the real cost of entering AND exiting at your size from Jupiter quotes (no on-chain
+    execution): tokens received, USD returned, and round-trip loss % (both-side slippage). A honeypot
+    shows buyable=true but sellable=false — you can enter but not exit.
+
+    Args:
+        mint: The SPL or Token-2022 mint address.
+        amount_usd: Trade size in USD (default 100). Use your real size for an accurate estimate.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            buy = (await c.get(JUP_QUOTE, params={"inputMint": USDC_MINT, "outputMint": mint,
+                                                  "amount": max(1, int(amount_usd * 1e6)), "slippageBps": 300})).json()
+            if buy.get("error") or not buy.get("outAmount"):
+                return {"mint": mint, "buyable": False, "sellable": None, "note": "no buy route — illiquid or no market"}
+            tokens = int(buy["outAmount"])
+            sell = (await c.get(JUP_QUOTE, params={"inputMint": mint, "outputMint": USDC_MINT,
+                                                   "amount": tokens, "slippageBps": 300})).json()
+    except Exception as e:
+        return {"mint": mint, "error": f"{type(e).__name__}"}
+    if sell.get("error") or not sell.get("outAmount"):
+        return {"mint": mint, "buyable": True, "sellable": False, "tokens_received": tokens,
+                "note": "buy works, SELL fails — honeypot"}
+    exit_usd = round(int(sell["outAmount"]) / 1e6, 2)
+    return {"mint": mint, "buyable": True, "sellable": True, "enter_usd": amount_usd,
+            "tokens_received": tokens, "exit_usd": exit_usd,
+            "round_trip_loss_pct": round((amount_usd - exit_usd) / amount_usd * 100, 2)}
+
+
+@mcp.tool
+async def batch_scan(mints: list[str]) -> list[RiskReport]:
+    """Scan several tokens at once — one full safety report per mint (up to 10).
+
+    Args:
+        mints: List of SPL / Token-2022 mint addresses.
+    """
+    return [await scan_token(m) for m in mints[:10]]
+
+
+@mcp.tool
+async def scammer_dna(mint: str) -> dict:
+    """Scammer-DNA / intent score (0-100): how much the token's STRUCTURE looks like a deliberate scam.
+
+    A pattern score over structural signals — permanent delegate, kept mint/freeze authority, no sell
+    route, extreme holder concentration. NOT proof of intent; a heuristic to flag deliberate scam setups.
+
+    Args:
+        mint: The SPL or Token-2022 mint address.
+    """
+    m = await _read_mint(mint)
+    if not m:
+        return {"mint": mint, "intent_score": 0, "verdict": "unknown", "signals": ["token not readable"]}
+    score, signals = 0, []
+    if "permanentDelegate" in m["extensions"]:
+        score += 30; signals.append("permanent delegate — creator can seize your tokens")
+    if any(e in m["extensions"] for e in ("transferHook", "pausable")):
+        score += 15; signals.append("transfer hook / pausable — selling can be blocked")
+    if m["freeze_authority"]:
+        score += 12; signals.append("freeze authority kept")
+    if m["mint_authority"]:
+        score += 10; signals.append("mint authority kept")
+    if await _can_route_sell(mint, m["decimals"] or 0) is False:
+        score += 20; signals.append("no sell route (honeypot)")
+    h = await _largest_accounts(mint) or {}
+    if (h.get("top_holder_pct") or 0) >= 50:
+        score += 18; signals.append(f"top holder controls {h['top_holder_pct']:.0f}%")
+    score = min(100, score)
+    verdict = "likely malicious setup" if score >= 60 else "suspicious" if score >= 35 else "no strong intent signals"
+    return {"mint": mint, "intent_score": score, "verdict": verdict, "signals": signals or ["no strong intent signals"]}
+
+
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
 async def glama_ownership(request):
     """Ownership verification for the Glama MCP connector registry."""
@@ -585,12 +623,13 @@ async def llms_txt(request):
         "On-chain token-safety MCP for Solana AI trading agents. Reads a token's mint directly to "
         "flag rug & honeypot traps (mint/freeze authority, Token-2022 extensions, holder "
         "concentration, liquidity, sellability) before trading, then builds an unsigned, Jito-tipped "
-        "(MEV-resistant) swap.\n\n"
+        "swap (small tip for faster inclusion).\n\n"
         "Remote MCP endpoint: https://web-production-58d585.up.railway.app/mcp\n"
         "Registry: io.github.MrWizardlyLoaf/rugcheck-ai\n"
         "Repo: https://github.com/MrWizardlyLoaf/rugcheck-ai\n\n"
-        "Tools: scan_token, verify_token_safety, check_authorities, simulate_sell, check_liquidity, "
-        "holders_breakdown, token_age, rug_forecast, check_deployer, compare_tokens, execute_safe_swap.\n\n"
+        "Tools: scan_token, is_safe, verify_token_safety, check_authorities, simulate_sell, "
+        "simulate_trade, check_liquidity, holders_breakdown, token_age, rug_forecast, scammer_dna, "
+        "check_deployer, compare_tokens, batch_scan, execute_safe_swap.\n\n"
         "Use cases: is this Solana token safe to buy or a rug pull; is it a honeypot (can I sell after "
         "buying); holder concentration / whale risk; pre-trade screening for autonomous trading agents.\n")
 

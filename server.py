@@ -20,7 +20,7 @@ from solders.instruction import AccountMeta, Instruction
 from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 RPC = os.environ.get("SOLANA_RPC", "https://api.mainnet-beta.solana.com")
 SPL_TOKEN = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
@@ -575,6 +575,24 @@ async def glama_ownership(request):
         "$schema": "https://glama.ai/mcp/schemas/connector.json",
         "maintainers": [{"email": "eliamcortesytbr@outlook.com"}],
     })
+
+
+@mcp.custom_route("/llms.txt", methods=["GET"])
+async def llms_txt(request):
+    """AI-crawler discovery file (llms.txt standard) served at the domain root."""
+    return PlainTextResponse(
+        "# RugCheck AI\n\n"
+        "On-chain token-safety MCP for Solana AI trading agents. Reads a token's mint directly to "
+        "flag rug & honeypot traps (mint/freeze authority, Token-2022 extensions, holder "
+        "concentration, liquidity, sellability) before trading, then builds an unsigned, Jito-tipped "
+        "(MEV-resistant) swap.\n\n"
+        "Remote MCP endpoint: https://web-production-58d585.up.railway.app/mcp\n"
+        "Registry: io.github.MrWizardlyLoaf/rugcheck-ai\n"
+        "Repo: https://github.com/MrWizardlyLoaf/rugcheck-ai\n\n"
+        "Tools: scan_token, verify_token_safety, check_authorities, simulate_sell, check_liquidity, "
+        "holders_breakdown, token_age, rug_forecast, check_deployer, compare_tokens, execute_safe_swap.\n\n"
+        "Use cases: is this Solana token safe to buy or a rug pull; is it a honeypot (can I sell after "
+        "buying); holder concentration / whale risk; pre-trade screening for autonomous trading agents.\n")
 
 
 if __name__ == "__main__":

@@ -67,6 +67,37 @@ Your agent needs to answer, before it spends a cent:
 Built for AI trading agents, snipers and bots that buy SPL / Token-2022 tokens and need a fast
 on-chain rug check before entering — then a screened, MEV-resistant route once a token clears.
 
+## FAQ
+
+**How do I check if a Solana token is safe to buy?**
+Call `scan_token(mint)` — one call returns a SAFE / CAUTION / DANGER verdict covering mint/freeze
+authority, Token-2022 traps, honeypot (sellability), liquidity and holder concentration, plus a
+0–100 safety score.
+
+**How do I detect a honeypot before buying?**
+`simulate_sell(mint)` checks whether a live sell route exists — a token with no route is effectively
+a honeypot even when nothing on-chain formally blocks selling.
+
+**How do I check holder concentration / whale dump risk?**
+`holders_breakdown(mint)` reports the largest wallets and what share of supply they control — high
+concentration means one holder can crash the price on you.
+
+**How do I know if a token is a rug pull?**
+`rug_forecast(mint)` gives a heuristic rug probability and urgency window from real signals
+(authority, Token-2022 traps, concentration, sell pressure, age). `check_authorities` and
+`check_deployer` show exactly who holds power over the token.
+
+**Does it work on fresh / newly launched tokens?**
+Yes — it reads the mint directly on-chain (`getAccountInfo`), so you get a real verdict on a token
+too new to be indexed elsewhere. `token_age` shows freshness and real trading activity.
+
+**Does it touch my wallet or sign anything?**
+No. Screening is read-only; `execute_safe_swap` only builds an UNSIGNED transaction for you to sign —
+the server never holds keys, never signs, never sends.
+
+**Is it free? Do I need an API key?**
+Remote server, no install, no API key. Point your agent at the endpoint and call the tools.
+
 ## Status
 
 v1.1.0 — working, actively developed, CI-tested. Open source, auditable — the screening tools are

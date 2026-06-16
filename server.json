@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.MrWizardlyLoaf/rugcheck-ai",
-  "description": "On-chain Solana token safety — screen for rugs/honeypots and execute MEV-protected swaps.",
+  "description": "On-chain Solana token safety — screen for rugs/honeypots, then build screened, Jito-tipped (MEV-resistant) swaps.",
   "version": "1.0.0",
   "repository": {
     "url": "https://github.com/MrWizardlyLoaf/rugcheck-ai",

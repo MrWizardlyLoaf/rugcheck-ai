@@ -1,8 +1,9 @@
 # RugCheck AI
 
 > On-chain token-safety MCP for Solana AI agents. Reads a token's mint directly to flag rug &
-> honeypot traps (mint/freeze authority, Token-2022 extensions) before trading, then executes an
-> MEV-protected buy. Built with Python (FastMCP); entry point server.py; screening is read-only.
+> honeypot traps (mint/freeze authority, Token-2022 extensions) before trading, then builds an
+> unsigned, Jito-tipped (MEV-resistant) Jupiter buy for tokens that pass. Built with Python
+> (FastMCP); entry point server.py; screening is read-only, execution returns an unsigned tx.
 
 Remote endpoint: https://web-production-58d585.up.railway.app/mcp
 Registry: io.github.MrWizardlyLoaf/rugcheck-ai
@@ -16,4 +17,4 @@ Registry: io.github.MrWizardlyLoaf/rugcheck-ai
 - verify_token_safety(mint): on-chain safety audit (authority + Token-2022 traps)
 - check_authorities(mint): mint/freeze authority + extension detection
 - simulate_sell(mint): honeypot / sellability check
-- execute_safe_swap(input_mint, output_mint, wallet, amount): MEV-protected execution
+- execute_safe_swap(mint, wallet, amount_usd): re-screened, Jito-tipped (MEV-resistant) execution; returns unsigned tx

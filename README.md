@@ -1,6 +1,6 @@
 # 🛡️ RugCheck AI — On-chain Token Safety for Solana AI Agents
 
-![version](https://img.shields.io/badge/version-1.0.0-blue)
+![version](https://img.shields.io/badge/version-1.0.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/MCP-Registry-7c3aed)
 ![python](https://img.shields.io/badge/python-3.12-3776ab)
@@ -44,9 +44,22 @@ Most agents trade Solana tokens blind. RugCheck AI calls `getAccountInfo` on the
 authorities and Token-2022 extensions itself, so you get a real verdict on a fresh launch instead of
 `unknown` — and a live mint or freeze authority is flagged before you buy, not after.
 
+## Use it when
+
+Your agent needs to answer, before it spends a cent:
+
+- *Is this Solana token safe to buy — or is it a rug pull?*
+- *Is this a honeypot — will I actually be able to sell after I buy?*
+- *Does the mint have an active freeze / mint authority that can trap or dilute me?*
+- *Is there a hidden Token-2022 trap (permanent delegate, transfer hook) that can drain me?*
+- *Pre-trade screening / token due-diligence for an autonomous trading agent.*
+
+Built for AI trading agents, snipers and bots that buy SPL / Token-2022 tokens and need a fast
+on-chain rug check before entering — then a screened, MEV-resistant route once a token clears.
+
 ## Status
 
-v1.0.0 — working, actively developed, CI-tested. Open source, auditable — the screening tools are
+v1.0.1 — working, actively developed, CI-tested. Open source, auditable — the screening tools are
 read-only (`getAccountInfo`); `execute_safe_swap` only builds an unsigned transaction for you to sign.
 
 ---

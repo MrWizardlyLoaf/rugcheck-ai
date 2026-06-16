@@ -8,6 +8,12 @@
 Remote endpoint: https://web-production-58d585.up.railway.app/mcp
 Registry: io.github.MrWizardlyLoaf/rugcheck-ai
 
+## Use cases
+Answers, before an agent buys: is this Solana token safe to buy or a rug pull; is it a honeypot (can
+I actually sell after buying); does the mint have an active freeze/mint authority; is there a hidden
+Token-2022 trap (permanent delegate, transfer hook) that drains the buyer. Pre-trade screening and
+token due-diligence for autonomous Solana trading agents, snipers and bots.
+
 ## Docs
 - [README](https://github.com/MrWizardlyLoaf/rugcheck-ai/blob/main/README.md): overview, tools, connect
 - [Source server.py](https://raw.githubusercontent.com/MrWizardlyLoaf/rugcheck-ai/main/server.py): full server code

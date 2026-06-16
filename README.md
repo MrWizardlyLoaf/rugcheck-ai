@@ -1,6 +1,6 @@
 # 🛡️ RugCheck AI — On-chain Token Safety for Solana AI Agents
 
-![version](https://img.shields.io/badge/version-1.0.1-blue)
+![version](https://img.shields.io/badge/version-1.0.2-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/MCP-Registry-7c3aed)
 ![python](https://img.shields.io/badge/python-3.12-3776ab)
@@ -59,7 +59,7 @@ on-chain rug check before entering — then a screened, MEV-resistant route once
 
 ## Status
 
-v1.0.1 — working, actively developed, CI-tested. Open source, auditable — the screening tools are
+v1.0.2 — working, actively developed, CI-tested. Open source, auditable — the screening tools are
 read-only (`getAccountInfo`); `execute_safe_swap` only builds an unsigned transaction for you to sign.
 
 ---

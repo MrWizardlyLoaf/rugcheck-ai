@@ -13,7 +13,7 @@ import struct
 
 import httpx
 from fastmcp import FastMCP
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from solders.hash import Hash
 from solders.instruction import AccountMeta, Instruction
 from solders.message import Message
@@ -38,53 +38,61 @@ _BLOCKING_EXTS = {"nonTransferable", "pausable"}
 
 
 class TokenSafety(BaseModel):
-    """Result of an on-chain token safety audit."""
-    token: str
-    verdict: str  # SAFE / CAUTION / DANGER / UNKNOWN
-    mint_authority: str | None = None
-    freeze_authority: str | None = None
-    supply: str | None = None
-    decimals: int | None = None
-    extensions: list[str] = []
-    risks: list[str] = []
-    error: str | None = None
+    """On-chain safety verdict for one SPL / Token-2022 mint, produced before you trade it."""
+    token: str = Field(description="The mint address that was audited.")
+    verdict: str = Field(description="Overall risk: SAFE (no red flags), CAUTION (authority/liquidity risk), "
+                         "DANGER (rug or honeypot trap present), or UNKNOWN (not a mint / RPC unavailable).")
+    mint_authority: str | None = Field(default=None, description="Active mint-authority address if present — its "
+                                       "holder can mint new supply and dilute you after purchase; None means revoked.")
+    freeze_authority: str | None = Field(default=None, description="Active freeze-authority address if present — its "
+                                         "holder can freeze your account so you cannot sell; None means revoked.")
+    supply: str | None = Field(default=None, description="Raw on-chain total supply.")
+    decimals: int | None = Field(default=None, description="Token decimal places.")
+    extensions: list[str] = Field(default=[], description="Token-2022 extensions present on the mint (e.g. transferHook).")
+    risks: list[str] = Field(default=[], description="Plain-language risk flags detected; empty means none found.")
+    error: str | None = Field(default=None, description="Populated when the mint could not be read.")
 
 
 class Authorities(BaseModel):
-    """Mint/freeze authority and Token-2022 extension report for a mint."""
-    mint: str
-    mint_authority: str | None = None
-    freeze_authority: str | None = None
-    token2022_extensions: list[str] = []
-    dangerous_extensions: list[str] = []
-    verdict: str | None = None
-    error: str | None = None
+    """Mint/freeze authority and Token-2022 extension report for one mint."""
+    mint: str = Field(description="The mint address inspected.")
+    mint_authority: str | None = Field(default=None, description="Active mint-authority address, or None if revoked.")
+    freeze_authority: str | None = Field(default=None, description="Active freeze-authority address, or None if revoked.")
+    token2022_extensions: list[str] = Field(default=[], description="All Token-2022 extensions present on the mint.")
+    dangerous_extensions: list[str] = Field(default=[], description="Subset considered dangerous: permanentDelegate, "
+                                            "transferHook, nonTransferable, pausable.")
+    verdict: str | None = Field(default=None, description="'clean' if no authorities/traps present, otherwise 'review'.")
+    error: str | None = Field(default=None, description="Populated when the mint could not be read.")
 
 
 class SellCheck(BaseModel):
-    """Whether a token can be sold (honeypot check) from on-chain constraints."""
-    mint: str
-    sellable: bool | None = None
-    blocking_extensions: list[str] = []
-    freeze_authority: str | None = None
-    verdict: str | None = None
-    error: str | None = None
+    """Honeypot / sellability result for one mint — whether a buyer could actually sell it back."""
+    mint: str = Field(description="The mint address checked.")
+    sellable: bool | None = Field(default=None, description="True if a live sell route exists and nothing on-chain "
+                                  "blocks selling; False if blocked or no route; None if it could not be determined.")
+    blocking_extensions: list[str] = Field(default=[], description="Extensions that block selling (nonTransferable, pausable).")
+    freeze_authority: str | None = Field(default=None, description="Active freeze authority, which can also block selling.")
+    verdict: str | None = Field(default=None, description="Plain-language sellability summary with the reason.")
+    error: str | None = Field(default=None, description="Populated when the mint could not be read.")
 
 
 class SwapResult(BaseModel):
-    """A built, unsigned swap transaction for the agent to sign."""
-    action: str
-    token: str
-    amount_usd: float
-    route: str
-    note: str
-    transaction: str
+    """An UNSIGNED swap transaction (or a block notice) returned for the agent to sign itself."""
+    action: str = Field(description="'buy' when a swap was built, or 'blocked' when the token failed the safety screen.")
+    token: str = Field(description="The token mint the swap targets.")
+    amount_usd: float = Field(description="The USD size requested for the trade.")
+    route: str = Field(description="Route label: 'safety-verified' when screened & built, 'screen-blocked' if refused.")
+    note: str = Field(description="Human-readable note: sign to execute, or why it was blocked.")
+    transaction: str = Field(description="Base64 UNSIGNED transaction for the agent to sign & submit; empty if blocked.")
 
 
 mcp = FastMCP(name="RugCheck AI",
-              instructions="On-chain token safety + safe execution for Solana agents. Call "
-                           "verify_token_safety to screen a token, then execute_safe_swap to buy it "
-                           "through a safety-verified route in one step.")
+              instructions="On-chain token-safety screening + safe execution for Solana trading agents. "
+                           "Typical flow: call verify_token_safety(mint) FIRST for a SAFE/CAUTION/DANGER "
+                           "verdict; use check_authorities for a focused authority picture and simulate_sell "
+                           "for a dedicated honeypot/sellability check; then execute_safe_swap to buy a token "
+                           "that cleared — it re-screens and returns an unsigned, Jito-tipped (MEV-resistant) "
+                           "transaction for you to sign. Screening tools are read-only; nothing ever signs for you.")
 
 
 async def _latest_blockhash() -> Hash:
@@ -179,11 +187,17 @@ async def _has_market(mint: str) -> bool | None:
 
 @mcp.tool
 async def verify_token_safety(mint: str) -> TokenSafety:
-    """Run an on-chain safety audit on a Solana token before trading.
+    """Audit a Solana token for rug-pull and honeypot risk before buying it.
 
-    Reads the mint directly and flags an active mint authority (supply can be inflated), an active
-    freeze authority (your tokens can be frozen), dangerous Token-2022 extensions, and whether the
-    token has a live, routable market (illiquid / no market is itself a risk).
+    Call this FIRST, before entering any position. Reads the mint directly on-chain (getAccountInfo)
+    and flags: an active mint authority (supply can be inflated after you buy), an active freeze
+    authority (your tokens can be frozen), dangerous Token-2022 extensions (permanent delegate,
+    transfer hook, non-transferable, pausable), and whether the token has a live, routable market
+    (no market is itself a risk). Returns a TokenSafety with a SAFE / CAUTION / DANGER / UNKNOWN
+    verdict plus the specific risks found — gate your buy decision on `verdict`.
+
+    Args:
+        mint: The SPL or Token-2022 mint address to audit.
     """
     m = await _read_mint(mint)
     if not m:
@@ -206,7 +220,15 @@ async def verify_token_safety(mint: str) -> TokenSafety:
 
 @mcp.tool
 async def check_authorities(mint: str) -> Authorities:
-    """Check mint/freeze authority and Token-2022 traps, read directly from the chain."""
+    """Report a token's mint/freeze authority and Token-2022 traps, read directly on-chain.
+
+    Use this for a focused authority check when you want the raw authority picture (e.g. to confirm a
+    creator truly renounced control) rather than the full verdict from verify_token_safety. Returns an
+    Authorities report listing every Token-2022 extension and which of them are dangerous.
+
+    Args:
+        mint: The SPL or Token-2022 mint address to inspect.
+    """
     m = await _read_mint(mint)
     if not m:
         return Authorities(mint=mint, error="not an SPL/Token-2022 mint, or RPC unavailable")
@@ -231,11 +253,15 @@ async def _can_route_sell(mint: str, decimals: int) -> bool | None:
 
 @mcp.tool
 async def simulate_sell(mint: str) -> SellCheck:
-    """Check whether the token can actually be sold (honeypot check).
+    """Check whether a token can actually be SOLD after buying — a dedicated honeypot detector.
 
-    Combines on-chain constraints (non-transferable / pausable extensions, freeze authority) with a
-    live Jupiter sell-route probe — a token with no sell route is effectively a honeypot even if no
-    extension blocks it.
+    Call this when you specifically worry a token is a honeypot (you can buy but not exit). Combines
+    on-chain constraints (non-transferable / pausable extensions, freeze authority) with a live
+    Jupiter sell-route probe — a token with no sell route is effectively a honeypot even if no
+    extension formally blocks it. Returns a SellCheck where `sellable` is the bottom line.
+
+    Args:
+        mint: The SPL or Token-2022 mint address to test for sellability.
     """
     m = await _read_mint(mint)
     if not m:

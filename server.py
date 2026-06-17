@@ -405,6 +405,8 @@ async def scan_token(mint: str) -> RiskReport:
         risks.append(f"very low liquidity (${liq:,.0f})")
     score = max(0, 100 - 40 * len(bad) - 15 * (len(risks) - len(bad)))
     verdict = "DANGER" if (bad or sellable is False) else ("CAUTION" if risks else "SAFE")
+    if verdict == "DANGER":
+        score = min(score, 20)  # a DANGER verdict (honeypot / dangerous extension) is near-total-loss — keep the score coherent
     return RiskReport(mint=mint, verdict=verdict, safety_score=score, risks=risks or ["no red flags found"],
                       mint_authority=m["mint_authority"], freeze_authority=m["freeze_authority"],
                       dangerous_extensions=bad, sellable=sellable, liquidity_usd=liq,

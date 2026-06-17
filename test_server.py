@@ -118,6 +118,7 @@ def test_scan_permanent_delegate_is_danger(monkeypatch):
     _patch_chain(monkeypatch, extensions=["permanentDelegate"])
     r = _call("scan_token", "Mint")
     assert r.verdict == "DANGER"
+    assert r.safety_score <= 20  # DANGER must read as a low score, not a misleading 60
     assert any("permanent delegate" in x.lower() for x in r.risks)
 
 
@@ -125,6 +126,7 @@ def test_scan_no_sell_route_is_danger(monkeypatch):
     _patch_chain(monkeypatch, extensions=[], sellable=False)
     r = _call("scan_token", "Mint")
     assert r.verdict == "DANGER"  # honeypot: clean on-chain but cannot be sold
+    assert r.safety_score <= 20  # honeypot = near-total loss → score must be low, coherent with the verdict
 
 
 def test_scan_active_authority_is_caution(monkeypatch):

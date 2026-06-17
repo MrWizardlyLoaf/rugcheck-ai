@@ -13,6 +13,38 @@ dangerous Token-2022 extensions (permanent delegate, transfer hooks, non-transfe
 then, for tokens that pass, builds the buy as an **unsigned** Jupiter transaction carrying a small Jito
 tip for faster inclusion. You sign it; the server never holds keys.
 
+## Quickstart (30 seconds)
+
+No install, no API key. Point your agent at the remote endpoint:
+
+```
+https://web-production-58d585.up.railway.app/mcp
+```
+
+Then ask one question before any buy:
+
+```
+scan_token("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263")   # BONK
+→ { verdict: "SAFE", safety_score: 100, sellable: true, risks: ["no red flags found"] }
+```
+
+`SAFE` → clear. `CAUTION` → read the risks. `DANGER` → don't buy. That's the whole loop.
+
+## See it catch a rug
+
+Three real mainnet tokens, one `scan_token` call each (scanned 2026-06-17 — re-run to verify, live state changes):
+
+| Token | Verdict | Why |
+|---|---|---|
+| **BONK** | `SAFE` · 100 | authority renounced, liquid, sellable — no red flags |
+| **USDC** | `CAUTION` · 70 | issuer keeps an active mint **and** freeze authority — your balance *can* be frozen |
+| fresh pump token `24tF…i9pump` | `DANGER` · 20 | **no sell route** (honeypot), **100%** held by one wallet, **$0** liquidity |
+
+The honeypot is the one that matters: you could buy it and never sell. RugCheck AI flags it **before** your
+agent spends a cent — even though the token is too new to be indexed anywhere else. Even USDC comes back
+`CAUTION`, not `SAFE`, because the issuer can still freeze your balance — the verdict tells you the truth, not
+a marketing label.
+
 ## Tools
 
 **Screening**
@@ -51,6 +83,24 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io) 
 pip install -r requirements.txt
 SOLANA_RPC=<your-rpc-url> python server.py
 ```
+
+### Add it to your agent
+
+**Cline / Claude Dev (VS Code)** — in `cline_mcp_settings.json`:
+
+```json
+{ "mcpServers": { "rugcheck-ai": { "url": "https://web-production-58d585.up.railway.app/mcp" } } }
+```
+
+**Claude Desktop** — in `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "rugcheck-ai": { "command": "npx", "args": ["-y", "mcp-remote", "https://web-production-58d585.up.railway.app/mcp"] } } }
+```
+
+**Cursor** — Settings → MCP → Add → Streamable HTTP, then paste the endpoint URL.
+
+**Any MCP client** — it's a standard Streamable HTTP MCP server; point your client at the `/mcp` endpoint and the 15 tools appear.
 
 ## Why
 
